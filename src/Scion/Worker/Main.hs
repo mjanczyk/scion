@@ -26,6 +26,7 @@ import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parse as C
 import qualified Distribution.Verbosity as C
 import qualified Distribution.Simple.GHC as C hiding ( configure )
+import qualified Distribution.Simple.LHC as C hiding ( configure )
 import qualified Distribution.Simple.Command as C
 import qualified Distribution.Simple.Setup as C
 import qualified Distribution.Simple.Program as C
@@ -228,10 +229,14 @@ initGhcSession targets args1 _debugMsg kont = do
   debugMsg $ "GHC Args: " ++ show (map Ghc.unLoc args1)
 
   -- handles Ctrl-C and GHC panics and suchlike
+#if __GLASGOW_HASKELL__ >= 706
+  Ghc.defaultErrorHandler Ghc.defaultFatalMessager defaultFlushOut $ do
+#else
 #if __GLASGOW_HASKELL__ >= 702
   Ghc.defaultErrorHandler Ghc.defaultLogAction $ do
 #else
   Ghc.defaultErrorHandler Ghc.defaultDynFlags $ do
+#endif
 #endif
 
     -- 1. Initialise all the static flags
@@ -249,30 +254,30 @@ initGhcSession targets args1 _debugMsg kont = do
       base_dir <- liftIO $ canonicalFilePath <$>
                     (canonical =<< getCurrentDirectory)
       
-      let addNote :: NoteKind -> Ghc.SrcSpan -> SDoc -> IO ()
-          addNote nkind loc msg =
+      let addNote :: DynFlags -> NoteKind -> Ghc.SrcSpan -> SDoc -> IO ()
+          addNote dflags nkind loc msg =
             let note = Note { noteKind = nkind
-                            , noteLoc = ghcSpanToLocation base_dir loc
-                            , noteMessage = fromString (showSDoc msg) } in
+                            , noteLoc = ghcSpanToLocation dflags base_dir loc
+                            , noteMessage = fromString (showSDoc dflags msg) } in
             atomicModifyIORef notes_ref $ \ns ->
               (note : ns, ())
       
 
-      let msg_text loc sty msg = 
-            showSDoc (O.hang (ppr loc) 8 (withPprStyle sty msg))
+      let msg_text dflags loc sty msg = 
+            showSDoc dflags (O.hang (ppr loc) 8 (withPprStyle sty msg))
             
-          my_log_action severity loc sty msg = do
+          my_log_action dflags severity loc sty msg = do
             case severity of
               --Ghc.SevOutput -> debugMsg $ "OUT: " ++ msg_text loc sty msg
               Ghc.SevWarning -> do
                 --debugMsg $ "WARN: " ++ msg_text loc sty msg
-                addNote WarningNote loc (withPprStyle sty msg)
+                addNote dflags WarningNote loc (withPprStyle sty msg)
               Ghc.SevError   -> do
                 --debugMsg $ "ERR: " ++ msg_text loc sty msg
-                addNote ErrorNote loc (withPprStyle sty msg)
-              Ghc.SevInfo    -> debugMsg $ "INFO: " ++ msg_text loc sty msg
-              Ghc.SevFatal   -> debugMsg $ "FATAL: " ++ msg_text loc sty msg
-              _   -> debugMsg $ "OUT: " ++ msg_text loc sty msg
+                addNote dflags ErrorNote loc (withPprStyle sty msg)
+              Ghc.SevInfo    -> debugMsg $ "INFO: " ++ msg_text dflags loc sty msg
+              Ghc.SevFatal   -> debugMsg $ "FATAL: " ++ msg_text dflags loc sty msg
+              _   -> debugMsg $ "OUT: " ++ msg_text dflags loc sty msg
       let dflags1 =
             dflags0{ ghcMode = CompManager
                    , hscTarget = HscNothing
@@ -295,7 +300,7 @@ initGhcSession targets args1 _debugMsg kont = do
         liftIO $ debugMsg $ "Setting targets: " ++ show targets
         Ghc.setTargets targets' 
 
-        r <- liftIO $ mkWorkerState notes_ref
+        r <- liftIO $ mkWorkerState dflags2 notes_ref
         unWorker (load Ghc.LoadAllTargets >>= kont) r
 
 -- | Configure Cabal project if necessary.  It is necessary if:

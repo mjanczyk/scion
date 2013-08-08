@@ -26,6 +26,7 @@ import qualified SrcLoc as GHC
 import qualified FastString as GHC ( unpackFS )
 import qualified Outputable as GHC ( showSDoc, ppr, showSDocForUser )
 import qualified Bag ( bagToList )
+import DynFlags ( DynFlags )
 
 import qualified Data.MultiSet as MS
 import System.FilePath
@@ -240,17 +241,17 @@ ghcSpanToLocation baseDir sp
          s@('<':_) -> OtherSrc s
          p -> FileSrc $ mkAbsFilePath baseDir p
 
-ghcErrMsgToNote :: FilePath -> GHC.ErrMsg -> Note
-ghcErrMsgToNote = ghcMsgToNote ErrorNote
+ghcErrMsgToNote :: DynFlags -> FilePath -> GHC.ErrMsg -> Note
+ghcErrMsgToNote dflags = ghcMsgToNote dflags ErrorNote
 
-ghcWarnMsgToNote :: FilePath -> GHC.WarnMsg -> Note
-ghcWarnMsgToNote = ghcMsgToNote WarningNote
+ghcWarnMsgToNote :: DynFlags -> FilePath -> GHC.WarnMsg -> Note
+ghcWarnMsgToNote dflags = ghcMsgToNote dflags WarningNote
 
 -- Note that we don *not* include the extra info, since that information is
 -- only useful in the case where we don not show the error location directly
 -- in the source.
-ghcMsgToNote :: NoteKind -> FilePath -> GHC.ErrMsg -> Note
-ghcMsgToNote note_kind base_dir msg =
+ghcMsgToNote :: DynFlags -> NoteKind -> FilePath -> GHC.ErrMsg -> Note
+ghcMsgToNote dflags note_kind base_dir msg =
     Note { noteLoc = ghcSpanToLocation base_dir loc
          , noteKind = note_kind
          , noteMessage = show_msg (GHC.errMsgShortDoc msg)
@@ -259,17 +260,18 @@ ghcMsgToNote note_kind base_dir msg =
     loc | (s:_) <- GHC.errMsgSpans msg = s
         | otherwise                    = GHC.noSrcSpan
     unqual = GHC.errMsgContext msg
-    show_msg = GHC.showSDocForUser unqual
+    show_msg = GHC.showSDocForUser dflags unqual
 
 -- | Convert 'GHC.Messages' to 'Notes'.
 --
 -- This will mix warnings and errors, but you can split them back up
 -- by filtering the 'Notes' based on the 'noteKind'.
-ghcMessagesToNotes :: FilePath -- ^ Base path for normalising paths.
+ghcMessagesToNotes :: DynFlags
+                   -> FilePath -- ^ Base path for normalising paths.
                                -- See 'mkAbsFilePath'.
                    -> GHC.Messages -> Notes
-ghcMessagesToNotes base_dir (warns, errs) =
-    MS.union (map_bag2ms (ghcWarnMsgToNote base_dir) warns)
-             (map_bag2ms (ghcErrMsgToNote base_dir) errs)
+ghcMessagesToNotes dflags base_dir (warns, errs) =
+    MS.union (map_bag2ms (ghcWarnMsgToNote dflags base_dir) warns)
+             (map_bag2ms (ghcErrMsgToNote dflags base_dir) errs)
   where
     map_bag2ms f = MS.fromList . map f . Bag.bagToList

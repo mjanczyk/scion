@@ -25,12 +25,34 @@ import qualified Data.Text as T
 import           Data.String ( fromString )
 import           System.FilePath.Canonical
 
+import DynFlags (DynFlags)
+
 -- * Converting from Ghc types.
 
 -- | Convert a 'Ghc.SrcSpan' to a 'Location'.
 --
 -- The first argument is used to normalise relative source locations to an
 -- absolute file path.
+#if __GLASGOW_HASKELL__ >= 706
+ghcSpanToLocation :: DynFlags
+                  -> FilePath -- ^ Base directory
+                  -> Ghc.SrcSpan
+                  -> Location
+ghcSpanToLocation _dflags baseDir sp@(Ghc.RealSrcSpan rsp)
+  | Ghc.isGoodSrcSpan sp =
+      mkLocation mkLocFile
+                 (Ghc.srcSpanStartLine rsp)
+                 (ghcColToScionCol $ Ghc.srcSpanStartCol rsp)
+                 (Ghc.srcSpanEndLine rsp)
+                 (ghcColToScionCol $ Ghc.srcSpanEndCol rsp)
+ where
+   mkLocFile =
+       case Ghc.unpackFS (Ghc.srcSpanFile rsp) of
+         s@('<':_) -> OtherSrc s
+         p -> FileSrc $ mkAbsFilePath baseDir p
+ghcSpanToLocation dflags _baseDir sp =
+  mkNoLoc (Ghc.showSDoc dflags (Ghc.ppr sp))
+#else
 ghcSpanToLocation :: FilePath -- ^ Base directory
                   -> Ghc.SrcSpan
                   -> Location
@@ -65,19 +87,20 @@ ghcSpanToLocation baseDir sp
          s@('<':_) -> OtherSrc s
          p -> FileSrc $ mkAbsFilePath baseDir p
 #endif
+#endif
 
-ghcErrMsgToNote :: FilePath -> Ghc.ErrMsg -> Note
-ghcErrMsgToNote = ghcMsgToNote ErrorNote
+ghcErrMsgToNote :: DynFlags -> FilePath -> Ghc.ErrMsg -> Note
+ghcErrMsgToNote dflags = ghcMsgToNote dflags ErrorNote
 
-ghcWarnMsgToNote :: FilePath -> Ghc.WarnMsg -> Note
-ghcWarnMsgToNote = ghcMsgToNote WarningNote
+ghcWarnMsgToNote :: DynFlags -> FilePath -> Ghc.WarnMsg -> Note
+ghcWarnMsgToNote dflags = ghcMsgToNote dflags WarningNote
 
 -- Note that we don *not* include the extra info, since that information is
 -- only useful in the case where we don not show the error location directly
 -- in the source.
-ghcMsgToNote :: NoteKind -> FilePath -> Ghc.ErrMsg -> Note
-ghcMsgToNote note_kind base_dir msg =
-    Note { noteLoc = ghcSpanToLocation base_dir loc
+ghcMsgToNote :: DynFlags -> NoteKind -> FilePath -> Ghc.ErrMsg -> Note
+ghcMsgToNote dflags note_kind base_dir msg =
+    Note { noteLoc = ghcSpanToLocation dflags base_dir loc
          , noteKind = note_kind
          , noteMessage = T.pack (show_msg (Ghc.errMsgShortDoc msg))
          }
@@ -85,18 +108,19 @@ ghcMsgToNote note_kind base_dir msg =
     loc | (s:_) <- Ghc.errMsgSpans msg = s
         | otherwise                    = Ghc.noSrcSpan
     unqual = Ghc.errMsgContext msg
-    show_msg = Ghc.showSDocForUser unqual
+    show_msg = Ghc.showSDocForUser dflags unqual
 
 -- | Convert 'Ghc.Messages' to 'Notes'.
 --
 -- This will mix warnings and errors, but you can split them back up
 -- by filtering the 'Notes' based on the 'noteKind'.
-ghcMessagesToNotes :: FilePath -- ^ Base path for normalising paths.
+ghcMessagesToNotes :: DynFlags
+                   -> FilePath -- ^ Base path for normalising paths.
                                -- See 'mkAbsFilePath'.
                    -> Ghc.Messages -> Notes
-ghcMessagesToNotes base_dir (warns, errs) =
-    MS.union (map_bag2ms (ghcWarnMsgToNote base_dir) warns)
-             (map_bag2ms (ghcErrMsgToNote base_dir) errs)
+ghcMessagesToNotes dflags base_dir (warns, errs) =
+    MS.union (map_bag2ms (ghcWarnMsgToNote dflags base_dir) warns)
+             (map_bag2ms (ghcErrMsgToNote dflags base_dir) errs)
   where
     map_bag2ms f = MS.fromList . map f . Bag.bagToList
 

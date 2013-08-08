@@ -20,6 +20,7 @@ import HscTypes  ( WarnLogMonad(..) )
 import MonadUtils ( MonadIO, liftIO )
 import Exception ( ExceptionMonad(..) )
 #endif
+import DynFlags (DynFlags, HasDynFlags(..))
 
 newtype Worker a
   = Worker { unWorker :: IORef WorkerState -> Ghc a }
@@ -29,14 +30,16 @@ data WorkerState = WorkerState
   , workerLogHandle :: Maybe Handle
   , workerLogLevel  :: Verbosity
   , workerNewNotes  :: IORef [Note]
+  , workerDynFlags  :: DynFlags
   }
 
-mkWorkerState :: IORef [Note] -> IO (IORef WorkerState)
-mkWorkerState r = newIORef $ WorkerState
+mkWorkerState :: DynFlags -> IORef [Note] -> IO (IORef WorkerState)
+mkWorkerState dflags r = newIORef $ WorkerState
   { workerLBI = Nothing
   , workerLogHandle = Nothing
   , workerLogLevel = normal
-  , workerNewNotes = r}
+  , workerNewNotes = r
+  , workerDynFlags = dflags}
 
 instance Functor Worker where
   fmap f (Worker g) = Worker $ \r -> fmap f (g r)
@@ -83,3 +86,6 @@ instance LogMonad Worker where
   message verb msg = do
     v <- getVerbosity
     when (verb <= v) $ io $ hPutStrLn stderr msg >> hFlush stderr
+
+instance HasDynFlags Worker where
+  getDynFlags = Worker $ \r -> workerDynFlags <$> io (readIORef r)
